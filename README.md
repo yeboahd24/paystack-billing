@@ -18,20 +18,80 @@ A modular, embeddable Go package for adding subscriptions, rate limiting, and us
 
 ## Quick start
 
+### Run the example server
+
 ```bash
+git clone https://github.com/yeboahd24/paystack-billing.git
+cd paystack-billing
 cp .env.example .env
-# Fill in your API keys
+# Fill in PAYSTACK_SECRET_KEY (test key is fine)
 
 redis-server &  # or: docker run -d -p 6379:6379 redis:7-alpine
 go run ./cmd/example
 ```
 
-```
+```bash
 $ curl http://localhost:8080/health
 {"status":"ok"}
 
 $ curl http://localhost:8080/usage
 {"Daily":null,"Today":0,"Allowed":20}
+```
+
+### Import as a library in your own Go project
+
+```bash
+go get github.com/yeboahd24/paystack-billing
+```
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+
+	"github.com/yeboahd24/paystack-billing/billing"
+	"github.com/yeboahd24/paystack-billing/email"
+	"github.com/yeboahd24/paystack-billing/plan"
+	"github.com/yeboahd24/paystack-billing/subscription"
+	"github.com/yeboahd24/paystack-billing/worker"
+	"github.com/yeboahd24/paystack-billing/store/sqlite"
+)
+
+func main() {
+	// 1. Open SQLite (auto-migrates)
+	db, _ := sqlite.Open("./data/billing.db")
+
+	planRepo := sqlite.NewPlanRepository(db)
+	subRepo := sqlite.NewSubscriptionRepository(db)
+	userRepo := sqlite.NewUserRepository(db)
+
+	// 2. Load plans from DB (create 'free', 'starter', 'pro' rows)
+	plans, _ := plan.NewService(context.Background(), planRepo)
+
+	// 3. Create payment provider
+	pay := billing.NewPaystack(os.Getenv("PAYSTACK_SECRET_KEY"), "GHS")
+
+	// 4. Create email sender
+	var sender email.Sender = email.NewNoop()
+	if key := os.Getenv("BREVO_API_KEY"); key != "" {
+		sender = email.NewBrevo(key, os.Getenv("BREVO_FROM_EMAIL"), os.Getenv("BREVO_FROM_NAME"))
+	}
+
+	// 5. Create billing service
+	subSvc := subscription.NewService(subRepo, userRepo, pay, plans, sender)
+
+	// 6. Start background expiry sweeper
+	go worker.RunExpirySweep(context.Background(), subSvc)
+
+	// 7. Handle a Paystack webhook
+	// subSvc.HandleChargeSuccess(ctx, userID, "pro", "paystack_ref_123")
+
+	// 8. Check if user's tier is good enough for a feature
+	// if !plans.TierAtLeast(user.Tier, "starter") { reject }
+}
 ```
 
 ## Configuration
