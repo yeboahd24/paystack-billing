@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/dominicyeboah/paystack-billing/plan"
-	"github.com/dominicyeboah/paystack-billing/store"
-	"github.com/dominicyeboah/paystack-billing/store/db"
+	"github.com/yeboahd24/paystack-billing/plan"
+	"github.com/yeboahd24/paystack-billing/store"
+	"github.com/yeboahd24/paystack-billing/store/db"
 )
 
 type Service struct {

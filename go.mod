@@ -1,4 +1,4 @@
-module github.com/dominicyeboah/paystack-billing
+module github.com/yeboahd24/paystack-billing
 
 go 1.26
 

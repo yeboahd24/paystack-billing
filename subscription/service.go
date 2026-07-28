@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dominicyeboah/paystack-billing/billing"
-	"github.com/dominicyeboah/paystack-billing/email"
-	"github.com/dominicyeboah/paystack-billing/plan"
-	"github.com/dominicyeboah/paystack-billing/store"
+	"github.com/yeboahd24/paystack-billing/billing"
+	"github.com/yeboahd24/paystack-billing/email"
+	"github.com/yeboahd24/paystack-billing/plan"
+	"github.com/yeboahd24/paystack-billing/store"
 )
 
 var (

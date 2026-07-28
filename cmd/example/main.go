@@ -14,14 +14,14 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/dominicyeboah/paystack-billing/billing"
-	"github.com/dominicyeboah/paystack-billing/email"
-	"github.com/dominicyeboah/paystack-billing/plan"
-	"github.com/dominicyeboah/paystack-billing/ratelimit"
-	"github.com/dominicyeboah/paystack-billing/subscription"
-	"github.com/dominicyeboah/paystack-billing/usage"
-	"github.com/dominicyeboah/paystack-billing/worker"
-	"github.com/dominicyeboah/paystack-billing/store/sqlite"
+	"github.com/yeboahd24/paystack-billing/billing"
+	"github.com/yeboahd24/paystack-billing/email"
+	"github.com/yeboahd24/paystack-billing/plan"
+	"github.com/yeboahd24/paystack-billing/ratelimit"
+	"github.com/yeboahd24/paystack-billing/subscription"
+	"github.com/yeboahd24/paystack-billing/usage"
+	"github.com/yeboahd24/paystack-billing/worker"
+	"github.com/yeboahd24/paystack-billing/store/sqlite"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/dominicyeboah/paystack-billing/subscription"
+	"github.com/yeboahd24/paystack-billing/subscription"
 )
 
 const (

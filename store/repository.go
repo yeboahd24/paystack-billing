@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/dominicyeboah/paystack-billing/store/db"
+	"github.com/yeboahd24/paystack-billing/store/db"
 )
 
 type PlanRepository interface {

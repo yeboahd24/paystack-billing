@@ -7,7 +7,7 @@ import (
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 
-	"github.com/dominicyeboah/paystack-billing/migrations"
+	"github.com/yeboahd24/paystack-billing/migrations"
 )
 
 type DB struct {
