@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/dominicyeboah/paystack-billing/internal/circuitbreaker"
+	"github.com/dominicyeboah/paystack-billing/circuitbreaker"
 )
 
 type PaystackProvider struct {

@@ -14,13 +14,13 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/dominicyeboah/paystack-billing/internal/billing"
-	"github.com/dominicyeboah/paystack-billing/internal/email"
-	"github.com/dominicyeboah/paystack-billing/internal/plan"
-	"github.com/dominicyeboah/paystack-billing/internal/ratelimit"
-	"github.com/dominicyeboah/paystack-billing/internal/subscription"
-	"github.com/dominicyeboah/paystack-billing/internal/usage"
-	"github.com/dominicyeboah/paystack-billing/internal/worker"
+	"github.com/dominicyeboah/paystack-billing/billing"
+	"github.com/dominicyeboah/paystack-billing/email"
+	"github.com/dominicyeboah/paystack-billing/plan"
+	"github.com/dominicyeboah/paystack-billing/ratelimit"
+	"github.com/dominicyeboah/paystack-billing/subscription"
+	"github.com/dominicyeboah/paystack-billing/usage"
+	"github.com/dominicyeboah/paystack-billing/worker"
 	"github.com/dominicyeboah/paystack-billing/store/sqlite"
 )
 

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dominicyeboah/paystack-billing/internal/billing"
-	"github.com/dominicyeboah/paystack-billing/internal/email"
-	"github.com/dominicyeboah/paystack-billing/internal/plan"
+	"github.com/dominicyeboah/paystack-billing/billing"
+	"github.com/dominicyeboah/paystack-billing/email"
+	"github.com/dominicyeboah/paystack-billing/plan"
 	"github.com/dominicyeboah/paystack-billing/store"
 )
 

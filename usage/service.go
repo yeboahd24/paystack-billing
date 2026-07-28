@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/dominicyeboah/paystack-billing/internal/plan"
+	"github.com/dominicyeboah/paystack-billing/plan"
 	"github.com/dominicyeboah/paystack-billing/store"
 	"github.com/dominicyeboah/paystack-billing/store/db"
 )
