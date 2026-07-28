@@ -1,0 +1,10 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    schema: "sql/schema.sql"
+    queries: "sql/queries/"
+    gen:
+      go:
+        package: "db"
+        out: "store/db"
+        emit_pointers_for_null_types: true
