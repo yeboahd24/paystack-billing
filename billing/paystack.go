@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/yeboahd24/paystack-billing/circuitbreaker"
@@ -117,4 +119,44 @@ func (p *PaystackProvider) ParseWebhook(body []byte) (*WebhookEvent, error) {
 
 func ReadBody(r io.Reader) ([]byte, error) {
 	return io.ReadAll(r)
+}
+
+func (p *PaystackProvider) VerifyTransaction(ctx context.Context, reference string, expectedAmount int) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("https://api.paystack.co/transaction/verify/%s", url.PathEscape(reference)), nil)
+	if err != nil {
+		return false, fmt.Errorf("paystack verify request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.secretKey)
+
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("paystack verify: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Status bool `json:"status"`
+		Data   struct {
+			Status   string `json:"status"`
+			Amount   int    `json:"amount"`
+			Currency string `json:"currency"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, fmt.Errorf("paystack verify decode: %w", err)
+	}
+	if !result.Status {
+		return false, nil
+	}
+	if result.Data.Status != "success" {
+		return false, nil
+	}
+	if result.Data.Amount != expectedAmount {
+		return false, nil
+	}
+	if !strings.EqualFold(result.Data.Currency, p.currency) {
+		return false, nil
+	}
+	return true, nil
 }
