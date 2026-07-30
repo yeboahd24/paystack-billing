@@ -9,12 +9,14 @@ import (
 	"time"
 )
 
+// BrevoClient sends emails via the Brevo transactional API.
 type BrevoClient struct {
 	apiKey string
 	http   *http.Client
 	from   Address
 }
 
+// NewBrevo creates a Brevo email client.
 func NewBrevo(apiKey, fromEmail, fromName string) *BrevoClient {
 	return &BrevoClient{
 		apiKey: apiKey,

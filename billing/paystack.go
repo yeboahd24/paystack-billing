@@ -17,6 +17,7 @@ import (
 	"github.com/yeboahd24/paystack-billing/circuitbreaker"
 )
 
+// PaystackProvider implements PaymentProvider for the Paystack API.
 type PaystackProvider struct {
 	secretKey string
 	currency  string
@@ -24,6 +25,7 @@ type PaystackProvider struct {
 	cb        *circuitbreaker.Breaker
 }
 
+// NewPaystack creates a PaystackProvider with the given secret key and currency.
 func NewPaystack(secretKey, currency string) *PaystackProvider {
 	return &PaystackProvider{
 		secretKey: secretKey,
@@ -117,6 +119,7 @@ func (p *PaystackProvider) ParseWebhook(body []byte) (*WebhookEvent, error) {
 	}, nil
 }
 
+// ReadBody reads the entire body from a reader.
 func ReadBody(r io.Reader) ([]byte, error) {
 	return io.ReadAll(r)
 }

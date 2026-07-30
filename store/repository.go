@@ -30,3 +30,7 @@ type UserRepository interface {
 	UpdateUserTier(ctx context.Context, id int64, tier string, dailyLimit int64) error
 	ListPaidTierUsers(ctx context.Context) ([]db.User, error)
 }
+
+type TxProvider interface {
+	WithTx(ctx context.Context, fn func(SubscriptionRepository, UserRepository) error) error
+}
