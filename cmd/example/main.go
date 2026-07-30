@@ -94,20 +94,26 @@ func main() {
 		log.Fatalf("plans: %v", err)
 	}
 
-	subSvc := subscription.NewService(subRepo, userRepo, pay, plans, sender)
+	subSvc := subscription.NewService(subRepo, userRepo, db, pay, plans, sender)
 	usageSvc := usage.NewService(usageRepo, plans)
 	limiter := ratelimit.New(rdb)
 
 	// ── Seed plans (first run) ─────────────────────────────
 	if len(plans.List()) == 0 {
 		log.Println("seeding default plans...")
-		db.ExecContext(context.Background(),
-			`INSERT INTO plans (name, display_name, amount, daily_limit, description) VALUES ('free', 'Free', 0, 20, '20 requests/day')`)
-		db.ExecContext(context.Background(),
-			`INSERT INTO plans (name, display_name, amount, daily_limit, description) VALUES ('starter', 'Starter', 9900, 500, '500 requests/day')`)
-		db.ExecContext(context.Background(),
-			`INSERT INTO plans (name, display_name, amount, daily_limit, retention_days, description) VALUES ('pro', 'Professional', 49900, 5000, 90, '5000 requests/day, 90-day retention')`)
-		plans, _ = plan.NewService(context.Background(), planRepo)
+		seeds := []string{
+			`INSERT INTO plans (name, display_name, amount, daily_limit, description) VALUES ('free', 'Free', 0, 20, '20 requests/day')`,
+			`INSERT INTO plans (name, display_name, amount, daily_limit, description) VALUES ('starter', 'Starter', 9900, 500, '500 requests/day')`,
+			`INSERT INTO plans (name, display_name, amount, daily_limit, retention_days, description) VALUES ('pro', 'Professional', 49900, 5000, 90, '5000 requests/day, 90-day retention')`,
+		}
+		for _, s := range seeds {
+			if _, err := db.ExecContext(context.Background(), s); err != nil {
+				log.Fatalf("seed: %v", err)
+			}
+		}
+		if plans, err = plan.NewService(context.Background(), planRepo); err != nil {
+			log.Fatalf("reload plans: %v", err)
+		}
 	}
 
 	// ── Rate-limited middleware ─────────────────────────────

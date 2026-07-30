@@ -8,10 +8,12 @@ import (
 	"github.com/yeboahd24/paystack-billing/store/db"
 )
 
+// UsageRepository implements store.UsageRepository for SQLite.
 type UsageRepository struct {
 	q *db.Queries
 }
 
+// NewUsageRepository creates a usage repository backed by the given DB.
 func NewUsageRepository(d *DB) *UsageRepository {
 	return &UsageRepository{q: db.New(d.DB)}
 }

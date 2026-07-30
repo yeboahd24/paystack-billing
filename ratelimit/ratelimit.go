@@ -1,3 +1,4 @@
+// Package ratelimit provides Redis-based rate limiting with graceful degradation.
 package ratelimit
 
 import (
@@ -9,16 +10,19 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// Limiter enforces daily and per-minute rate limits backed by Redis.
 type Limiter struct {
 	rdb           *redis.Client
 	redisDown     atomic.Bool
 	lastRedisFail atomic.Int64
 }
 
+// New creates a rate limiter backed by the given Redis client.
 func New(rdb *redis.Client) *Limiter {
 	return &Limiter{rdb: rdb}
 }
 
+// Allow checks the daily rate limit for the given key.
 func (l *Limiter) Allow(ctx context.Context, key string, dailyLimit int) (allowed bool, remaining int, err error) {
 	l.checkRecovered()
 
@@ -38,6 +42,7 @@ func (l *Limiter) Allow(ctx context.Context, key string, dailyLimit int) (allowe
 	return true, dailyLimit - int(count), nil
 }
 
+// AllowPerMinute checks the per-minute rate limit for the given key.
 func (l *Limiter) AllowPerMinute(ctx context.Context, key string, perMinute int) (allowed bool, err error) {
 	l.checkRecovered()
 
@@ -53,6 +58,7 @@ func (l *Limiter) AllowPerMinute(ctx context.Context, key string, perMinute int)
 	return int(count) <= perMinute, nil
 }
 
+// Peek returns current daily usage without incrementing the counter.
 func (l *Limiter) Peek(ctx context.Context, key string, dailyLimit int) (used, remaining int, err error) {
 	l.checkRecovered()
 

@@ -5,8 +5,10 @@ import (
 	"log"
 )
 
+// NoopClient logs email sends without delivering them.
 type NoopClient struct{}
 
+// NewNoop creates a noop email client for development.
 func NewNoop() *NoopClient {
 	return &NoopClient{}
 }

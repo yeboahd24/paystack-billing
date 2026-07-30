@@ -8,12 +8,19 @@ import (
 	"github.com/yeboahd24/paystack-billing/store/db"
 )
 
+// SubscriptionRepository implements store.SubscriptionRepository for SQLite.
 type SubscriptionRepository struct {
 	q *db.Queries
 }
 
+// NewSubscriptionRepository creates a subscription repository backed by the given DB.
 func NewSubscriptionRepository(d *DB) *SubscriptionRepository {
 	return &SubscriptionRepository{q: db.New(d.DB)}
+}
+
+// NewSubscriptionRepositoryWithQueries creates a subscription repository using a specific queries instance.
+func NewSubscriptionRepositoryWithQueries(q *db.Queries) *SubscriptionRepository {
+	return &SubscriptionRepository{q: q}
 }
 
 var _ store.SubscriptionRepository = (*SubscriptionRepository)(nil)

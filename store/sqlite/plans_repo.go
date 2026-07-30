@@ -8,10 +8,12 @@ import (
 	"github.com/yeboahd24/paystack-billing/store/db"
 )
 
+// PlanRepository implements store.PlanRepository for SQLite.
 type PlanRepository struct {
 	q *db.Queries
 }
 
+// NewPlanRepository creates a plan repository backed by the given DB.
 func NewPlanRepository(d *DB) *PlanRepository {
 	return &PlanRepository{q: db.New(d.DB)}
 }
