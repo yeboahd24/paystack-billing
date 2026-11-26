@@ -17,10 +17,17 @@ import (
 	"github.com/yeboahd24/paystack-billing/circuitbreaker"
 )
 
+// defaultBaseURL is Paystack's API. Tests point baseURL at a local server.
+const defaultBaseURL = "https://api.paystack.co"
+
+// maxResponseBytes bounds what we read from Paystack.
+const maxResponseBytes = 1 << 20
+
 // PaystackProvider implements PaymentProvider for the Paystack API.
 type PaystackProvider struct {
 	secretKey string
 	currency  string
+	baseURL   string
 	http      *http.Client
 	cb        *circuitbreaker.Breaker
 }
@@ -30,6 +37,7 @@ func NewPaystack(secretKey, currency string) *PaystackProvider {
 	return &PaystackProvider{
 		secretKey: secretKey,
 		currency:  currency,
+		baseURL:   defaultBaseURL,
 		http:      &http.Client{Timeout: 15 * time.Second},
 		cb:        circuitbreaker.New(5, 30*time.Second),
 	}
@@ -48,7 +56,7 @@ func (p *PaystackProvider) InitTransaction(ctx context.Context, email string, am
 		"metadata":     metadata,
 	})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.paystack.co/transaction/initialize", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/transaction/initialize", bytes.NewReader(body))
 	if err != nil {
 		return "", "", fmt.Errorf("paystack request: %w", err)
 	}
@@ -124,9 +132,17 @@ func ReadBody(r io.Reader) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
+// VerifyTransaction asks Paystack whether a transaction succeeded for exactly
+// expectedAmount in the provider's currency.
+//
+// It returns (false, nil) only when Paystack answered and the payment is not
+// good: not found, not successful, or a different amount or currency. When
+// Paystack could not be asked (network error, timeout, 5xx, 429, an
+// unreadable reply), it returns an error, so callers can tell the customer to
+// retry instead of telling them their payment failed.
 func (p *PaystackProvider) VerifyTransaction(ctx context.Context, reference string, expectedAmount int) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("https://api.paystack.co/transaction/verify/%s", url.PathEscape(reference)), nil)
+		p.baseURL+"/transaction/verify/"+url.PathEscape(reference), nil)
 	if err != nil {
 		return false, fmt.Errorf("paystack verify request: %w", err)
 	}
@@ -138,6 +154,16 @@ func (p *PaystackProvider) VerifyTransaction(ctx context.Context, reference stri
 	}
 	defer resp.Body.Close()
 
+	switch {
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest:
+		// Paystack answered: no such transaction for this account.
+		return false, nil
+	case resp.StatusCode == http.StatusUnauthorized:
+		return false, fmt.Errorf("paystack verify: invalid secret key (401)")
+	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		return false, fmt.Errorf("paystack verify: HTTP %d", resp.StatusCode)
+	}
+
 	var result struct {
 		Status bool `json:"status"`
 		Data   struct {
@@ -146,7 +172,7 @@ func (p *PaystackProvider) VerifyTransaction(ctx context.Context, reference stri
 			Currency string `json:"currency"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
 		return false, fmt.Errorf("paystack verify decode: %w", err)
 	}
 	if !result.Status {
