@@ -10,25 +10,73 @@ import (
 	"database/sql"
 )
 
-const cancelActiveSubscription = `-- name: CancelActiveSubscription :exec
+const activatePendingSubscription = `-- name: ActivatePendingSubscription :execresult
+UPDATE subscriptions
+SET status = 'active', current_period_start = ?, current_period_end = ?
+WHERE provider_reference = ? AND status = 'pending'
+`
+
+type ActivatePendingSubscriptionParams struct {
+	CurrentPeriodStart *string
+	CurrentPeriodEnd   *string
+	ProviderReference  string
+}
+
+func (q *Queries) ActivatePendingSubscription(ctx context.Context, arg ActivatePendingSubscriptionParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, activatePendingSubscription, arg.CurrentPeriodStart, arg.CurrentPeriodEnd, arg.ProviderReference)
+}
+
+const cancelCurrentSubscription = `-- name: CancelCurrentSubscription :execresult
 UPDATE subscriptions SET status = 'cancelled'
 WHERE user_id = ? AND status = 'active'
 `
 
-func (q *Queries) CancelActiveSubscription(ctx context.Context, userID int64) error {
-	_, err := q.db.ExecContext(ctx, cancelActiveSubscription, userID)
+func (q *Queries) CancelCurrentSubscription(ctx context.Context, userID int64) (sql.Result, error) {
+	return q.db.ExecContext(ctx, cancelCurrentSubscription, userID)
+}
+
+const createPendingSubscription = `-- name: CreatePendingSubscription :exec
+INSERT OR IGNORE INTO subscriptions (user_id, plan, provider_reference, status, amount)
+VALUES (?, ?, ?, 'pending', ?)
+`
+
+type CreatePendingSubscriptionParams struct {
+	UserID            int64
+	Plan              string
+	ProviderReference string
+	Amount            *int64
+}
+
+func (q *Queries) CreatePendingSubscription(ctx context.Context, arg CreatePendingSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, createPendingSubscription,
+		arg.UserID,
+		arg.Plan,
+		arg.ProviderReference,
+		arg.Amount,
+	)
 	return err
 }
 
-const getActiveSubscription = `-- name: GetActiveSubscription :one
-SELECT id, user_id, plan, provider_reference, status, current_period_end, created_at
-FROM subscriptions
-WHERE user_id = ? AND status = 'active'
+const expireSubscription = `-- name: ExpireSubscription :execresult
+UPDATE subscriptions SET status = 'expired'
+WHERE id = ? AND status IN ('active', 'cancelled')
+`
+
+func (q *Queries) ExpireSubscription(ctx context.Context, id int64) (sql.Result, error) {
+	return q.db.ExecContext(ctx, expireSubscription, id)
+}
+
+const getCurrentSubscription = `-- name: GetCurrentSubscription :one
+SELECT id, user_id, "plan", provider_reference, status, current_period_end, created_at, amount, current_period_start FROM subscriptions
+WHERE user_id = ? AND status IN ('active', 'cancelled')
+ORDER BY id DESC
 LIMIT 1
 `
 
-func (q *Queries) GetActiveSubscription(ctx context.Context, userID int64) (Subscription, error) {
-	row := q.db.QueryRowContext(ctx, getActiveSubscription, userID)
+// The subscription that gives the user access now: active, or cancelled but
+// still inside its paid period. At most one exists (subscriptions_one_current).
+func (q *Queries) GetCurrentSubscription(ctx context.Context, userID int64) (Subscription, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentSubscription, userID)
 	var i Subscription
 	err := row.Scan(
 		&i.ID,
@@ -38,36 +86,111 @@ func (q *Queries) GetActiveSubscription(ctx context.Context, userID int64) (Subs
 		&i.Status,
 		&i.CurrentPeriodEnd,
 		&i.CreatedAt,
+		&i.Amount,
+		&i.CurrentPeriodStart,
 	)
 	return i, err
 }
 
-const insertSubscriptionIfNew = `-- name: InsertSubscriptionIfNew :execresult
-INSERT OR IGNORE INTO subscriptions (user_id, plan, provider_reference, status, current_period_end)
-VALUES (?, ?, ?, 'active', ?)
+const getSubscriptionByReference = `-- name: GetSubscriptionByReference :one
+SELECT id, user_id, "plan", provider_reference, status, current_period_end, created_at, amount, current_period_start FROM subscriptions
+WHERE provider_reference = ?
 `
 
-type InsertSubscriptionIfNewParams struct {
-	UserID            int64
-	Plan              string
-	ProviderReference string
-	CurrentPeriodEnd  *string
+func (q *Queries) GetSubscriptionByReference(ctx context.Context, providerReference string) (Subscription, error) {
+	row := q.db.QueryRowContext(ctx, getSubscriptionByReference, providerReference)
+	var i Subscription
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Plan,
+		&i.ProviderReference,
+		&i.Status,
+		&i.CurrentPeriodEnd,
+		&i.CreatedAt,
+		&i.Amount,
+		&i.CurrentPeriodStart,
+	)
+	return i, err
 }
 
-func (q *Queries) InsertSubscriptionIfNew(ctx context.Context, arg InsertSubscriptionIfNewParams) (sql.Result, error) {
-	return q.db.ExecContext(ctx, insertSubscriptionIfNew,
+const insertActiveSubscription = `-- name: InsertActiveSubscription :execresult
+INSERT OR IGNORE INTO subscriptions
+    (user_id, plan, provider_reference, status, amount, current_period_start, current_period_end)
+VALUES (?, ?, ?, 'active', ?, ?, ?)
+`
+
+type InsertActiveSubscriptionParams struct {
+	UserID             int64
+	Plan               string
+	ProviderReference  string
+	Amount             *int64
+	CurrentPeriodStart *string
+	CurrentPeriodEnd   *string
+}
+
+func (q *Queries) InsertActiveSubscription(ctx context.Context, arg InsertActiveSubscriptionParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, insertActiveSubscription,
 		arg.UserID,
 		arg.Plan,
 		arg.ProviderReference,
+		arg.Amount,
+		arg.CurrentPeriodStart,
 		arg.CurrentPeriodEnd,
 	)
 }
 
+const listExpiredSubscriptions = `-- name: ListExpiredSubscriptions :many
+SELECT id, user_id, "plan", provider_reference, status, current_period_end, created_at, amount, current_period_start FROM subscriptions
+WHERE status IN ('active', 'cancelled') AND current_period_end <= ?
+ORDER BY current_period_end
+LIMIT ?
+`
+
+type ListExpiredSubscriptionsParams struct {
+	CurrentPeriodEnd *string
+	Limit            int64
+}
+
+// Current subscriptions whose period has ended (period ends are UTC
+// "YYYY-MM-DD HH:MM:SS", so text comparison is time order).
+func (q *Queries) ListExpiredSubscriptions(ctx context.Context, arg ListExpiredSubscriptionsParams) ([]Subscription, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredSubscriptions, arg.CurrentPeriodEnd, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Subscription
+	for rows.Next() {
+		var i Subscription
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Plan,
+			&i.ProviderReference,
+			&i.Status,
+			&i.CurrentPeriodEnd,
+			&i.CreatedAt,
+			&i.Amount,
+			&i.CurrentPeriodStart,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserSubscriptions = `-- name: ListUserSubscriptions :many
-SELECT id, user_id, plan, provider_reference, status, current_period_end, created_at
-FROM subscriptions
+SELECT id, user_id, "plan", provider_reference, status, current_period_end, created_at, amount, current_period_start FROM subscriptions
 WHERE user_id = ?
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 `
 
 func (q *Queries) ListUserSubscriptions(ctx context.Context, userID int64) ([]Subscription, error) {
@@ -87,6 +210,8 @@ func (q *Queries) ListUserSubscriptions(ctx context.Context, userID int64) ([]Su
 			&i.Status,
 			&i.CurrentPeriodEnd,
 			&i.CreatedAt,
+			&i.Amount,
+			&i.CurrentPeriodStart,
 		); err != nil {
 			return nil, err
 		}
@@ -99,4 +224,54 @@ func (q *Queries) ListUserSubscriptions(ctx context.Context, userID int64) ([]Su
 		return nil, err
 	}
 	return items, nil
+}
+
+const markSubscriptionRefunded = `-- name: MarkSubscriptionRefunded :exec
+UPDATE subscriptions SET status = 'refunded'
+WHERE id = ?
+`
+
+func (q *Queries) MarkSubscriptionRefunded(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, markSubscriptionRefunded, id)
+	return err
+}
+
+const restoreSubscription = `-- name: RestoreSubscription :execresult
+UPDATE subscriptions SET status = 'active', current_period_end = ?
+WHERE id = ? AND status = 'superseded'
+`
+
+type RestoreSubscriptionParams struct {
+	CurrentPeriodEnd *string
+	ID               int64
+}
+
+// Makes a superseded row current again (after the payment that replaced it was refunded).
+func (q *Queries) RestoreSubscription(ctx context.Context, arg RestoreSubscriptionParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, restoreSubscription, arg.CurrentPeriodEnd, arg.ID)
+}
+
+const setSubscriptionPeriodEnd = `-- name: SetSubscriptionPeriodEnd :exec
+UPDATE subscriptions SET current_period_end = ?
+WHERE id = ?
+`
+
+type SetSubscriptionPeriodEndParams struct {
+	CurrentPeriodEnd *string
+	ID               int64
+}
+
+func (q *Queries) SetSubscriptionPeriodEnd(ctx context.Context, arg SetSubscriptionPeriodEndParams) error {
+	_, err := q.db.ExecContext(ctx, setSubscriptionPeriodEnd, arg.CurrentPeriodEnd, arg.ID)
+	return err
+}
+
+const supersedeSubscription = `-- name: SupersedeSubscription :exec
+UPDATE subscriptions SET status = 'superseded'
+WHERE id = ? AND status IN ('active', 'cancelled')
+`
+
+func (q *Queries) SupersedeSubscription(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, supersedeSubscription, id)
+	return err
 }
