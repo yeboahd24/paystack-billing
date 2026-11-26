@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,10 +20,10 @@ import (
 	"github.com/yeboahd24/paystack-billing/email"
 	"github.com/yeboahd24/paystack-billing/plan"
 	"github.com/yeboahd24/paystack-billing/ratelimit"
+	"github.com/yeboahd24/paystack-billing/store/sqlite"
 	"github.com/yeboahd24/paystack-billing/subscription"
 	"github.com/yeboahd24/paystack-billing/usage"
 	"github.com/yeboahd24/paystack-billing/worker"
-	"github.com/yeboahd24/paystack-billing/store/sqlite"
 )
 
 func main() {
@@ -117,6 +119,8 @@ func main() {
 	}
 
 	// ── Rate-limited middleware ─────────────────────────────
+	// Keyed by client IP (not ip:port, which is new on every connection). Behind
+	// a proxy, use the address it reports instead, and only if you trust it.
 	rateLimited := func(next http.HandlerFunc, tier string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			p := plans.Get(tier)
@@ -124,8 +128,12 @@ func main() {
 				http.Error(w, "unknown tier", http.StatusInternalServerError)
 				return
 			}
-			allowed, remaining, err := limiter.Allow(r.Context(), "api:"+r.RemoteAddr, int(p.DailyLimit))
-			if err != nil || !allowed {
+			allowed, remaining, err := limiter.Allow(r.Context(), "api:"+clientIP(r), int(p.DailyLimit))
+			if err != nil {
+				http.Error(w, "rate limiter unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if !allowed {
 				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
@@ -142,6 +150,9 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	// Paystack redelivers a webhook until it gets a 2xx. So: 200 when the event
+	// is handled or can never succeed (logged), 5xx when a retry might work
+	// (database or Paystack trouble), so a paid customer is never left behind.
 	mux.HandleFunc("POST /webhooks/paystack", func(w http.ResponseWriter, r *http.Request) {
 		body, err := billing.ReadBody(r.Body)
 		if err != nil || len(body) == 0 {
@@ -158,40 +169,69 @@ func main() {
 			http.Error(w, "bad payload", http.StatusBadRequest)
 			return
 		}
-		if event.Event == "charge.success" {
-			userID, ok := event.Metadata["user_id"].(float64)
-			if !ok {
-				http.Error(w, "bad metadata", http.StatusBadRequest)
-				return
-			}
-			planName, ok := event.Metadata["plan"].(string)
-			if !ok {
-				http.Error(w, "bad metadata", http.StatusBadRequest)
-				return
-			}
-			if err := subSvc.HandleChargeSuccess(r.Context(), int64(userID), planName, event.Reference); err != nil {
-				log.Printf("webhook: charge.success failed: %v", err)
-			}
+		switch event.Event {
+		case "charge.success":
+			// user_id/plan are optional: the checkout recorded them by reference.
+			err = subSvc.HandleChargeSuccess(r.Context(),
+				billing.MetadataInt(event.Metadata, "user_id"),
+				billing.MetadataString(event.Metadata, "plan"),
+				event.Reference)
+		case "refund.processed":
+			err = subSvc.HandleRefund(r.Context(), event.Reference, int64(event.Amount))
+		case "charge.dispute.create", "charge.dispute.remind", "charge.dispute.resolve":
+			// Not decided automatically: if you accept the dispute Paystack
+			// refunds the customer and sends refund.processed.
+			log.Printf("webhook: %s on %s: review it on the Paystack dashboard", event.Event, event.Reference)
+		}
+		switch {
+		case err == nil:
+		case subscription.IsPermanent(err):
+			log.Printf("webhook: %s %s: not applied: %v", event.Event, event.Reference, err)
+		default:
+			log.Printf("webhook: %s %s: will retry: %v", event.Event, event.Reference, err)
+			http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+			return
 		}
 		w.WriteHeader(http.StatusOK)
 	})
 
 	mux.HandleFunc("POST /checkout", rateLimited(func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := authenticatedUserID(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		var req struct {
-			UserID int64  `json:"user_id"`
-			Plan   string `json:"plan"`
+			Plan string `json:"plan"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		url, ref, err := subSvc.InitCheckout(r.Context(), req.UserID, req.Plan, "https://example.com/callback")
+		url, ref, err := subSvc.InitCheckout(r.Context(), userID, req.Plan, "https://example.com/callback")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"url": url, "reference": ref})
 	}, "starter"))
+
+	mux.HandleFunc("POST /subscription/cancel", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := authenticatedUserID(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := subSvc.Cancel(r.Context(), userID); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, subscription.ErrNoSubscription) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	mux.HandleFunc("GET /usage", rateLimited(func(w http.ResponseWriter, r *http.Request) {
 		userID := int64(1)
@@ -207,6 +247,7 @@ func main() {
 	// ── Background workers ────────────────────────────────
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	go worker.RunExpirySweep(bgCtx, subSvc)
+	go worker.RunPlanRefresh(bgCtx, plans, 10*time.Minute)
 
 	// ── HTTP server ────────────────────────────────────────
 	srv := &http.Server{
@@ -231,4 +272,30 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
+}
+
+// clientIP is the connection's IP without the port.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// authenticatedUserID stands in for your real authentication (session cookie,
+// JWT, API key). Never take the user from the request body: anyone could start
+// a checkout or cancel for someone else.
+//
+// For local testing only, EXAMPLE_INSECURE_DEMO_AUTH=1 trusts an X-Demo-User-ID
+// header. Without it every request is unauthorized.
+func authenticatedUserID(r *http.Request) (int64, bool) {
+	if os.Getenv("EXAMPLE_INSECURE_DEMO_AUTH") != "1" {
+		return 0, false
+	}
+	var id int64
+	if _, err := fmt.Sscan(r.Header.Get("X-Demo-User-ID"), &id); err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,7 +84,7 @@ func (p *PaystackProvider) InitTransaction(ctx context.Context, email string, am
 		} `json:"data"`
 		Message string `json:"message"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&out); err != nil {
 		p.cb.Failure()
 		return "", "", fmt.Errorf("paystack decode: %w", err)
 	}
@@ -106,30 +107,95 @@ func (p *PaystackProvider) VerifySignature(body []byte, signature string) bool {
 type paystackWebhook struct {
 	Event string `json:"event"`
 	Data  struct {
-		Reference string         `json:"reference"`
-		Status    string         `json:"status"`
-		Amount    int            `json:"amount"`
-		Metadata  map[string]any `json:"metadata"`
+		Reference            string `json:"reference"`
+		TransactionReference string `json:"transaction_reference"` // refund.*
+		Transaction          struct {
+			Reference string `json:"reference"`
+		} `json:"transaction"` // charge.dispute.*
+		Status   string          `json:"status"`
+		Amount   json.RawMessage `json:"amount"`
+		Metadata json.RawMessage `json:"metadata"`
 	} `json:"data"`
 }
 
+// ParseWebhook decodes a Paystack event. For refund and dispute events,
+// Reference is the reference of the original transaction. It is lenient where
+// Paystack is loose: amount may be a number or a string, and metadata may be an
+// object, a JSON string holding an object, or empty.
 func (p *PaystackProvider) ParseWebhook(body []byte) (*WebhookEvent, error) {
 	var raw paystackWebhook
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("paystack webhook parse: %w", err)
 	}
+	ref := raw.Data.Reference
+	switch {
+	case strings.HasPrefix(raw.Event, "refund.") && raw.Data.TransactionReference != "":
+		ref = raw.Data.TransactionReference
+	case strings.HasPrefix(raw.Event, "charge.dispute.") && raw.Data.Transaction.Reference != "":
+		ref = raw.Data.Transaction.Reference
+	}
 	return &WebhookEvent{
 		Event:     raw.Event,
-		Reference: raw.Data.Reference,
+		Reference: ref,
 		Status:    raw.Data.Status,
-		Amount:    raw.Data.Amount,
-		Metadata:  raw.Data.Metadata,
+		Amount:    lenientInt(raw.Data.Amount),
+		Metadata:  lenientMetadata(raw.Data.Metadata),
 	}, nil
 }
 
-// ReadBody reads the entire body from a reader.
+func lenientInt(raw json.RawMessage) int {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func lenientMetadata(raw json.RawMessage) map[string]any {
+	var m map[string]any
+	if json.Unmarshal(raw, &m) == nil {
+		return m
+	}
+	var inner string
+	if json.Unmarshal(raw, &inner) == nil && json.Unmarshal([]byte(inner), &m) == nil {
+		return m
+	}
+	return nil
+}
+
+// MetadataInt reads an integer from webhook metadata, whether it was echoed back
+// as a JSON number or a string (Paystack does both). It returns 0 if absent.
+func MetadataInt(m map[string]any, key string) int64 {
+	switch v := m[key].(type) {
+	case float64:
+		return int64(v)
+	case string:
+		n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n
+	}
+	return 0
+}
+
+// MetadataString reads a string from webhook metadata, or "".
+func MetadataString(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+// MaxWebhookBytes bounds a webhook body; Paystack events are a few KB.
+const MaxWebhookBytes = 1 << 20
+
+// ReadBody reads a webhook body, up to MaxWebhookBytes.
 func ReadBody(r io.Reader) ([]byte, error) {
-	return io.ReadAll(r)
+	b, err := io.ReadAll(io.LimitReader(r, MaxWebhookBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxWebhookBytes {
+		return nil, fmt.Errorf("webhook body over %d bytes", MaxWebhookBytes)
+	}
+	return b, nil
 }
 
 // VerifyTransaction asks Paystack whether a transaction succeeded for exactly

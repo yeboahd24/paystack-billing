@@ -14,13 +14,15 @@ type Plan struct {
 }
 
 type Subscription struct {
-	ID                int64
-	UserID            int64
-	Plan              string
-	ProviderReference string
-	Status            string
-	CurrentPeriodEnd  *string
-	CreatedAt         string
+	ID                 int64
+	UserID             int64
+	Plan               string
+	ProviderReference  string
+	Status             string
+	CurrentPeriodEnd   *string
+	CreatedAt          string
+	Amount             *int64
+	CurrentPeriodStart *string
 }
 
 type UsageHistory struct {
